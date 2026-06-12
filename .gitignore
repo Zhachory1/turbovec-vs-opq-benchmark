@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+results/_indexes/
+*.log
+*.tv
+*.tvim
+*.faiss
+.DS_Store
