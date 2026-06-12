@@ -22,6 +22,17 @@ large n + low dimension. Recall: TurboVec beats flat OPQ everywhere; vs OPQ+IVF
 it's mixed. Recall is on **synthetic clustered data** and is directional only —
 rerun on real embeddings before drawing conclusions.
 
+## Figures
+
+Serving speed vs recall — every cell, 4-bit (up-and-right is better):
+
+![QPS vs recall](report/figures/fig_qps_vs_recall.png)
+
+| | |
+|---|---|
+| ![build time](report/figures/fig_build_time.png) | ![QPS](report/figures/fig_qps.png) |
+| ![recall@10](report/figures/fig_recall.png) | ![size](report/figures/fig_size.png) |
+
 ## Reproduce
 
 ```bash

@@ -106,6 +106,8 @@ This is an operational, not a micro-optimization, difference: rebuilding/
 re-sharding indexes, iterating on data, or growing a corpus is effectively free
 with TurboVec and a multi-minute batch job with OPQ.
 
+![build time vs n](figures/fig_build_time.png)
+
 ### 2. Serving speed — fair only against OPQ+IVF
 
 Flat OPQ scans every vector, so its QPS collapses at scale (down to **7–20 QPS**
@@ -123,6 +125,12 @@ TurboVec's flat SIMD scan wins in most regimes, but at **very large n with low
 dim** the per-vector scan cost is tiny and IVF's pruning (skipping ~94% of
 lists) overtakes it.
 
+![QPS vs n](figures/fig_qps.png)
+
+The serving-speed/recall tradeoff across every cell (up-and-right is better):
+
+![QPS vs recall](figures/fig_qps_vs_recall.png)
+
 ### 3. Recall — TurboVec beats flat OPQ; OPQ+IVF is competitive
 
 Against flat OPQ, TurboVec wins recall in **every** cell. Against OPQ+IVF the
@@ -139,6 +147,8 @@ the data's clusters and OPQ+IVF often edges TurboVec at 2-bit and at d≥100:
 Low-dim (d=10) recall is poor for all quantizers — PQ at m=2–5 is very coarse,
 and d=10 is the hard regime TurboQuant's own docs flag.
 
+![recall@10 vs n](figures/fig_recall.png)
+
 ### 4. On-disk size
 
 Bytes/vector by engine (independent of n):
@@ -152,6 +162,8 @@ Bytes/vector by engine (independent of n):
 Flat OPQ is the most compact (no IVF overhead, no padding). TurboVec's
 multiple-of-8 padding and ~8-byte floor make it noticeably larger only at d=10;
 at d=100/500 the three are within ~15% of each other.
+
+![bytes per vector by dim](figures/fig_size.png)
 
 ---
 
@@ -375,4 +387,5 @@ Ratio >1 favours TurboVec for QPS/build; <1 favours the FAISS variant. R@10 delt
 - `scripts/bench.py` — TurboVec + flat OPQ pass
 - `scripts/bench_ivf.py` — OPQ+IVF pass (appends to the same CSV)
 - `scripts/make_report.py` — regenerates the tables in this report from the CSV
+- `scripts/plot.py` — regenerates the figures in `report/figures/` from the CSV
 - `results/results.csv` — all 66 rows (raw)
