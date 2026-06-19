@@ -96,10 +96,11 @@ def time_search(search_fn, Q, k, repeats):
     return qps, p50, p99, idx_out
 
 
-def run_cell(n, d, writer, fh):
+def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_override=None):
     rng = np.random.default_rng(SEED + n + d)
-    n_queries = 500 if n >= 10_000_000 else 1000
-    search_repeats = 1 if n >= 1_000_000 else 3
+    bits = bits or BITS
+    n_queries = n_queries_override or (500 if n >= 10_000_000 else 1000)
+    search_repeats = repeats_override or (1 if n >= 1_000_000 else 3)
     print(f"\n=== cell n={n} d={d} (queries={n_queries}) ===", flush=True)
     t = time.perf_counter()
     X, Q = gen_data(n, d, n_queries, rng)
@@ -118,7 +119,7 @@ def run_cell(n, d, writer, fh):
     Qp = pad8(Q)
     pad_dim = Xp.shape[1]
 
-    for bw in BITS:
+    for bw in bits:
         # ---- TurboVec ----
         try:
             t = time.perf_counter()
@@ -191,8 +192,21 @@ def run_cell(n, d, writer, fh):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-n", type=int, default=10_000_000)
+    ap.add_argument("--sizes", type=int, nargs="*", default=None)
     ap.add_argument("--dims", type=int, nargs="*", default=DIMS)
+    ap.add_argument("--bits", type=int, nargs="*", default=BITS)
+    ap.add_argument("--smoke", action="store_true", help="Run a tiny CI-friendly benchmark cell.")
     args = ap.parse_args()
+
+    sizes = args.sizes or SIZES
+    n_queries = None
+    repeats = None
+    if args.smoke:
+        sizes = [1_000]
+        args.dims = [10]
+        args.bits = [2]
+        n_queries = 25
+        repeats = 1
 
     new_file = not os.path.exists(CSV_PATH)
     fh = open(CSV_PATH, "a", newline="")
@@ -200,14 +214,14 @@ def main():
     if new_file:
         writer.writeheader(); fh.flush()
 
-    for n in SIZES:
+    for n in sizes:
         if n > args.max_n:
             continue
         for d in args.dims:
             if (n, d) in SKIP:
                 print(f"\n=== SKIP n={n} d={d} (too large for RAM) ===", flush=True)
                 continue
-            run_cell(n, d, writer, fh)
+            run_cell(n, d, writer, fh, bits=args.bits, n_queries_override=n_queries, repeats_override=repeats)
     fh.close()
     print("\nDONE. results ->", CSV_PATH, flush=True)
 

@@ -16,7 +16,7 @@ these):
   train  = min(n, 100_000)       (bigger than pass 1's 12k flat cap: IVF coarse
            quantizer needs enough points to populate nlist centroids)
 """
-import os, sys, time, gc, csv, math
+import os, sys, time, gc, csv, math, argparse
 import numpy as np
 import faiss
 
@@ -38,10 +38,11 @@ def pick_nlist(n, train):
     return max(1, nlist)
 
 
-def run_cell(n, d, writer, fh):
+def run_cell(n, d, writer, fh, bits=None, nlists=None, nprobes=None, n_queries_override=None, repeats_override=None):
     rng = np.random.default_rng(SEED + n + d)  # same seed as pass 1 -> same data
-    n_queries = 500 if n >= 10_000_000 else 1000
-    search_repeats = 1 if n >= 1_000_000 else 3
+    bits = bits or BITS
+    n_queries = n_queries_override or (500 if n >= 10_000_000 else 1000)
+    search_repeats = repeats_override or (1 if n >= 1_000_000 else 3)
     print(f"\n=== IVF cell n={n} d={d} ===", flush=True)
     X, Q = gen_data(n, d, n_queries, rng)
     flat = faiss.IndexFlatIP(d)
@@ -51,11 +52,14 @@ def run_cell(n, d, writer, fh):
     gc.collect()
 
     train = min(n, IVF_TRAIN_SAMPLE)
-    nlist = pick_nlist(n, train)
-    nprobe = max(1, nlist // 16)
+    default_nlist = pick_nlist(n, train)
+    nlists = nlists or [default_nlist]
 
-    for bw in BITS:
-        try:
+    for bw in bits:
+      for nlist in nlists:
+        probe_values = nprobes or [max(1, nlist // 16)]
+        for nprobe in probe_values:
+          try:
             m = opq_m(d, bw)
             fac = f"OPQ{m},IVF{nlist},PQ{m}"
             t = time.perf_counter()
@@ -83,21 +87,52 @@ def run_cell(n, d, writer, fh):
             os.remove(path)
             del fi
             gc.collect()
-        except Exception as e:
-            print(f"  OPQ+IVF{bw} FAILED: {e}", flush=True)
+          except Exception as e:
+            print(f"  OPQ+IVF{bw} nlist={nlist} nprobe={nprobe} FAILED: {e}", flush=True)
 
     del X, Q, gt
     gc.collect()
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sizes", type=int, nargs="*", default=None)
+    ap.add_argument("--dims", type=int, nargs="*", default=DIMS)
+    ap.add_argument("--bits", type=int, nargs="*", default=BITS)
+    ap.add_argument("--nlist", type=int, nargs="*", default=None)
+    ap.add_argument("--nprobe", type=int, nargs="*", default=None)
+    ap.add_argument("--smoke", action="store_true", help="Run a tiny CI-friendly IVF cell.")
+    args = ap.parse_args()
+
+    sizes = args.sizes or SIZES
+    n_queries = None
+    repeats = None
+    if args.smoke:
+        sizes = [1_000]
+        args.dims = [10]
+        args.bits = [2]
+        args.nlist = [16]
+        args.nprobe = [1, 4]
+        n_queries = 25
+        repeats = 1
+
     fh = open(CSV_PATH, "a", newline="")
     writer = csv.DictWriter(fh, fieldnames=FIELDS)
-    for n in SIZES:
-        for d in DIMS:
+    for n in sizes:
+        for d in args.dims:
             if (n, d) in SKIP:
                 continue
-            run_cell(n, d, writer, fh)
+            run_cell(
+                n,
+                d,
+                writer,
+                fh,
+                bits=args.bits,
+                nlists=args.nlist,
+                nprobes=args.nprobe,
+                n_queries_override=n_queries,
+                repeats_override=repeats,
+            )
     fh.close()
     print("\nIVF DONE. appended ->", CSV_PATH, flush=True)
 

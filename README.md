@@ -37,10 +37,29 @@ Serving speed vs recall — every cell, 4-bit (up-and-right is better):
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install numpy faiss-cpu turbovec
+.venv/bin/pip install numpy faiss-cpu turbovec matplotlib
 .venv/bin/python scripts/bench.py       # TurboVec + flat OPQ  (writes results/results.csv)
 .venv/bin/python scripts/bench_ivf.py   # OPQ+IVF              (appends)
 .venv/bin/python scripts/make_report.py # regenerate tables from the CSV
+```
+
+Small smoke mode for CI/local sanity checks:
+
+```bash
+.venv/bin/python scripts/bench.py --smoke
+.venv/bin/python scripts/bench_ivf.py --smoke
+```
+
+Tune IVF frontiers explicitly:
+
+```bash
+.venv/bin/python scripts/bench_ivf.py --sizes 100000 --dims 100 --bits 4 --nlist 128 256 512 --nprobe 1 4 16 64
+```
+
+Plot a different bit-width or size-bar reference cell:
+
+```bash
+.venv/bin/python scripts/plot.py --bit 2 --size-ref-n 100000
 ```
 
 Single-threaded; vectors unit-normalized (cosine); exact ground truth via
