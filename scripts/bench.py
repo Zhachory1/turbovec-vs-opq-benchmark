@@ -7,7 +7,7 @@ All vectors unit-normalized -> cosine; ground truth exact via IndexFlatIP.
 TurboVec needs dim multiple of 8 -> zero-pad (zeros do not change cosine ranking).
 Results streamed to results/results.csv so a crash on a big cell keeps earlier rows.
 """
-import os, sys, time, gc, csv, argparse, math
+import os, sys, time, gc, csv, argparse, math, json, platform
 import numpy as np
 import faiss
 import turbovec
@@ -36,6 +36,51 @@ FIELDS = [
     "qps", "lat_ms_p50", "lat_ms_p99",
     "recall@1", "recall@10", "recall@100", "n_queries",
 ]
+
+
+def row_key(row):
+    return (str(row["n"]), str(row["dim"]), row["engine"], str(row["bit_width"]), row["params"])
+
+
+def load_existing_keys(path=CSV_PATH):
+    if not os.path.exists(path):
+        return set()
+    with open(path, newline="") as f:
+        return {row_key(r) for r in csv.DictReader(f) if r.get("n")}
+
+
+def write_row(row, writer, fh, seen):
+    key = row_key(row)
+    if key in seen:
+        print(f"  SKIP existing {key}", flush=True)
+        return False
+    writer.writerow(row); fh.flush()
+    seen.add(key)
+    return True
+
+
+def failure_row(n, d, engine, bw, params, error, n_queries):
+    row = dict(n=n, dim=d, engine=engine, bit_width=bw, params=f"{params} ERROR: {error}",
+               build_s="", size_bytes="", bytes_per_vec="", qps="", lat_ms_p50="", lat_ms_p99="",
+               n_queries=n_queries)
+    for k in RECALL_KS:
+        row[f"recall@{k}"] = ""
+    return row
+
+
+def write_environment(path=os.path.join(RESULTS_DIR, "environment.json")):
+    env = {
+        "python": sys.version,
+        "platform": platform.platform(),
+        "numpy": np.__version__,
+        "faiss": getattr(faiss, "__version__", "unknown"),
+        "turbovec": getattr(turbovec, "__version__", "unknown"),
+        "omp_threads": 1,
+    }
+    with open(path, "w") as f:
+        json.dump(env, f, indent=2)
+        f.write("\n")
+    return env
 
 
 def pad8(a):
@@ -96,9 +141,10 @@ def time_search(search_fn, Q, k, repeats):
     return qps, p50, p99, idx_out
 
 
-def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_override=None):
+def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_override=None, seen=None):
     rng = np.random.default_rng(SEED + n + d)
     bits = bits or BITS
+    seen = seen if seen is not None else set()
     n_queries = n_queries_override or (500 if n >= 10_000_000 else 1000)
     search_repeats = repeats_override or (1 if n >= 1_000_000 else 3)
     print(f"\n=== cell n={n} d={d} (queries={n_queries}) ===", flush=True)
@@ -142,7 +188,7 @@ def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_overr
                        n_queries=n_queries)
             for k in RECALL_KS:
                 row[f"recall@{k}"] = round(recall_at(ti, gt, k), 4)
-            writer.writerow(row); fh.flush()
+            write_row(row, writer, fh, seen)
             print(f"  TV{bw}: build={build_s:.2f}s size={size/1e6:.1f}MB "
                   f"qps={qps:.0f} r@10={row['recall@10']}", flush=True)
             os.remove(path)
@@ -150,6 +196,7 @@ def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_overr
             gc.collect()
         except Exception as e:
             print(f"  TV{bw} FAILED: {e}", flush=True)
+            write_row(failure_row(n, d, "turbovec", bw, f"pad_dim={pad_dim}", e, n_queries), writer, fh, seen)
 
         # ---- FAISS OPQ ----
         try:
@@ -176,7 +223,7 @@ def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_overr
                        n_queries=n_queries)
             for k in RECALL_KS:
                 row[f"recall@{k}"] = round(recall_at(fidx, gt, k), 4)
-            writer.writerow(row); fh.flush()
+            write_row(row, writer, fh, seen)
             print(f"  OPQ{bw}({fac}): build={build_s:.2f}s size={size/1e6:.1f}MB "
                   f"qps={qps:.0f} r@10={row['recall@10']}", flush=True)
             os.remove(path)
@@ -184,6 +231,7 @@ def run_cell(n, d, writer, fh, bits=None, n_queries_override=None, repeats_overr
             gc.collect()
         except Exception as e:
             print(f"  OPQ{bw} FAILED: {e}", flush=True)
+            write_row(failure_row(n, d, "faiss_opq", bw, fac if 'fac' in locals() else 'OPQ', e, n_queries), writer, fh, seen)
 
     del X, Q, Xp, Qp, gt
     gc.collect()
@@ -196,6 +244,7 @@ def main():
     ap.add_argument("--dims", type=int, nargs="*", default=DIMS)
     ap.add_argument("--bits", type=int, nargs="*", default=BITS)
     ap.add_argument("--smoke", action="store_true", help="Run a tiny CI-friendly benchmark cell.")
+    ap.add_argument("--rerun", action="store_true", help="Append rows even when matching result rows already exist.")
     args = ap.parse_args()
 
     sizes = args.sizes or SIZES
@@ -207,6 +256,9 @@ def main():
         args.bits = [2]
         n_queries = 25
         repeats = 1
+
+    write_environment()
+    seen = set() if args.rerun else load_existing_keys(CSV_PATH)
 
     new_file = not os.path.exists(CSV_PATH)
     fh = open(CSV_PATH, "a", newline="")
@@ -221,7 +273,7 @@ def main():
             if (n, d) in SKIP:
                 print(f"\n=== SKIP n={n} d={d} (too large for RAM) ===", flush=True)
                 continue
-            run_cell(n, d, writer, fh, bits=args.bits, n_queries_override=n_queries, repeats_override=repeats)
+            run_cell(n, d, writer, fh, bits=args.bits, n_queries_override=n_queries, repeats_override=repeats, seen=seen)
     fh.close()
     print("\nDONE. results ->", CSV_PATH, flush=True)
 

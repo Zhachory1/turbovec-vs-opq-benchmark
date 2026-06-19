@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench import (  # noqa: E402
     SIZES, DIMS, SKIP, BITS, KMAX, RECALL_KS, SEED, FIELDS,
     pad8, opq_m, gen_data, recall_at, time_search, RESULTS_DIR, IDX_DIR, CSV_PATH,
+    load_existing_keys, write_environment, write_row, failure_row,
 )
 
 faiss.omp_set_num_threads(1)
@@ -38,9 +39,10 @@ def pick_nlist(n, train):
     return max(1, nlist)
 
 
-def run_cell(n, d, writer, fh, bits=None, nlists=None, nprobes=None, n_queries_override=None, repeats_override=None):
+def run_cell(n, d, writer, fh, bits=None, nlists=None, nprobes=None, n_queries_override=None, repeats_override=None, seen=None):
     rng = np.random.default_rng(SEED + n + d)  # same seed as pass 1 -> same data
     bits = bits or BITS
+    seen = seen if seen is not None else set()
     n_queries = n_queries_override or (500 if n >= 10_000_000 else 1000)
     search_repeats = repeats_override or (1 if n >= 1_000_000 else 3)
     print(f"\n=== IVF cell n={n} d={d} ===", flush=True)
@@ -81,7 +83,7 @@ def run_cell(n, d, writer, fh, bits=None, nlists=None, nprobes=None, n_queries_o
                        n_queries=n_queries)
             for k in RECALL_KS:
                 row[f"recall@{k}"] = round(recall_at(fidx, gt, k), 4)
-            writer.writerow(row); fh.flush()
+            write_row(row, writer, fh, seen)
             print(f"  OPQ+IVF{bw}({fac} nprobe={nprobe}): build={build_s:.2f}s "
                   f"size={size/1e6:.1f}MB qps={qps:.0f} r@10={row['recall@10']}", flush=True)
             os.remove(path)
@@ -89,6 +91,7 @@ def run_cell(n, d, writer, fh, bits=None, nlists=None, nprobes=None, n_queries_o
             gc.collect()
           except Exception as e:
             print(f"  OPQ+IVF{bw} nlist={nlist} nprobe={nprobe} FAILED: {e}", flush=True)
+            write_row(failure_row(n, d, "faiss_opq_ivf", bw, f"OPQ+IVF nlist={nlist} nprobe={nprobe}", e, n_queries), writer, fh, seen)
 
     del X, Q, gt
     gc.collect()
@@ -102,6 +105,7 @@ def main():
     ap.add_argument("--nlist", type=int, nargs="*", default=None)
     ap.add_argument("--nprobe", type=int, nargs="*", default=None)
     ap.add_argument("--smoke", action="store_true", help="Run a tiny CI-friendly IVF cell.")
+    ap.add_argument("--rerun", action="store_true", help="Append rows even when matching result rows already exist.")
     args = ap.parse_args()
 
     sizes = args.sizes or SIZES
@@ -115,6 +119,9 @@ def main():
         args.nprobe = [1, 4]
         n_queries = 25
         repeats = 1
+
+    write_environment()
+    seen = set() if args.rerun else load_existing_keys(CSV_PATH)
 
     fh = open(CSV_PATH, "a", newline="")
     writer = csv.DictWriter(fh, fieldnames=FIELDS)
@@ -132,6 +139,7 @@ def main():
                 nprobes=args.nprobe,
                 n_queries_override=n_queries,
                 repeats_override=repeats,
+                seen=seen,
             )
     fh.close()
     print("\nIVF DONE. appended ->", CSV_PATH, flush=True)
