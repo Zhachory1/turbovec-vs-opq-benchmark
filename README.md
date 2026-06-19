@@ -50,6 +50,8 @@ Small smoke mode for CI/local sanity checks:
 .venv/bin/python scripts/bench_ivf.py --smoke
 ```
 
+Benchmark scripts write `results/environment.json` with Python/platform/library versions. Runs are idempotent by default: rows with the same `(n, dim, engine, bit_width, params)` are skipped instead of duplicated. Use `--rerun` to append duplicate comparison rows intentionally.
+
 Tune IVF frontiers explicitly:
 
 ```bash
