@@ -50,7 +50,14 @@ Small smoke mode for CI/local sanity checks:
 .venv/bin/python scripts/bench_ivf.py --smoke
 ```
 
-Benchmark scripts write `results/environment.json` with Python/platform/library versions. Runs are idempotent by default: rows with the same `(n, dim, engine, bit_width, params)` are skipped instead of duplicated. Use `--rerun` to append duplicate comparison rows intentionally.
+Benchmark scripts write `results/environment.json` with Python/platform/library versions. Runs are idempotent by default: rows with the same `(n, dim, engine, bit_width, params, seed)` are skipped instead of duplicated. Use `--rerun` to append duplicate comparison rows intentionally.
+
+Run multiple seeds to estimate variance; generated report tables show mean ± sample standard deviation for metrics when a cell has multiple seed rows, and plots render error bars:
+
+```bash
+.venv/bin/python scripts/bench.py --smoke --seed-count 3
+.venv/bin/python scripts/bench_ivf.py --smoke --seeds 111 222 333
+```
 
 Tune IVF frontiers explicitly:
 
