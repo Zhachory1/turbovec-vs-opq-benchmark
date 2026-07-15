@@ -8,8 +8,9 @@ representative rate; 2-bit is in the CSV):
   fig_recall.png       recall@10 vs n         (x log)
   fig_size.png         bytes/vector by dim    (grouped bars)
 Plus fig_qps_vs_recall.png — QPS/recall tradeoff scatter (all cells, 4-bit).
+Error bars show sample standard deviation when multiple seed rows exist.
 """
-import argparse, csv, os
+import argparse, csv, os, collections, statistics
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -32,29 +33,45 @@ SIZE_REF_N = 1_000_000
 def load():
     with open(CSV) as f:
         rows = list(csv.DictReader(f))
-    R = {}
+    grouped = collections.defaultdict(list)
     for r in rows:
-        R[(int(r["n"]), int(r["dim"]), r["engine"], int(r["bit_width"]))] = r
-    ns = sorted({int(r["n"]) for r in rows})
-    return R, ns
+        if r.get("n"):
+            grouped[(int(r["n"]), int(r["dim"]), r["engine"], int(r["bit_width"]))].append(r)
+    ns = sorted({int(r["n"]) for r in rows if r.get("n")})
+    return grouped, ns
+
+
+def fnum(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def stat(rows, field):
+    vals = [v for v in (fnum(r.get(field)) for r in rows) if v is not None]
+    if not vals:
+        return None, None
+    return sum(vals) / len(vals), statistics.stdev(vals) if len(vals) > 1 else 0.0
 
 
 def series(R, ns, d, eng, field, bit=BIT):
-    xs, ys = [], []
+    xs, ys, yerr = [], [], []
     for n in ns:
-        r = R.get((n, d, eng, bit))
-        if r and r.get(field) not in (None, ""):
-            xs.append(n); ys.append(float(r[field]))
-    return xs, ys
+        rows = R.get((n, d, eng, bit), [])
+        m, s = stat(rows, field)
+        if m is not None:
+            xs.append(n); ys.append(m); yerr.append(s)
+    return xs, ys, yerr
 
 
 def faceted(R, ns, field, title, ylabel, fname, logy=True, bit=BIT):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.6), sharex=True)
     for ax, d in zip(axes, DIMS):
         for eng, label, color, mk in ENGINES:
-            xs, ys = series(R, ns, d, eng, field, bit=bit)
+            xs, ys, yerr = series(R, ns, d, eng, field, bit=bit)
             if xs:
-                ax.plot(xs, ys, marker=mk, color=color, label=label, lw=2, ms=7)
+                ax.errorbar(xs, ys, yerr=yerr, marker=mk, color=color, label=label, lw=2, ms=7, capsize=3)
         ax.set_xscale("log")
         if logy:
             ax.set_yscale("log")
@@ -76,11 +93,12 @@ def size_bars(R, ns, bit=BIT, ref_n=SIZE_REF_N):
     fig, ax = plt.subplots(figsize=(8, 4.6))
     x = np.arange(len(DIMS)); w = 0.26
     for i, (eng, label, color, _) in enumerate(ENGINES):
-        vals = []
+        vals, errs = [], []
         for d in DIMS:
-            r = R.get((ref_n, d, eng, bit))
-            vals.append(float(r["bytes_per_vec"]) if r else 0.0)
-        ax.bar(x + (i - 1) * w, vals, w, label=label, color=color)
+            m, s = stat(R.get((ref_n, d, eng, bit), []), "bytes_per_vec")
+            vals.append(m if m is not None else 0.0)
+            errs.append(s if s is not None else 0.0)
+        ax.bar(x + (i - 1) * w, vals, w, yerr=errs, capsize=3, label=label, color=color)
     ax.set_xticks(x); ax.set_xticklabels([f"dim={d}" for d in DIMS])
     ax.set_ylabel("bytes / vector")
     ax.set_title(f"Index size per vector ({ref_n:,}, {bit}-bit)", fontweight="bold")
@@ -94,13 +112,18 @@ def size_bars(R, ns, bit=BIT, ref_n=SIZE_REF_N):
 def qps_vs_recall(R, ns, bit=BIT):
     fig, ax = plt.subplots(figsize=(8, 5.2))
     for eng, label, color, mk in ENGINES:
-        xs, ys = [], []
+        xs, ys, xerr, yerr = [], [], [], []
         for n in ns:
             for d in DIMS:
-                r = R.get((n, d, eng, bit))
-                if r:
-                    ys.append(float(r["qps"])); xs.append(float(r["recall@10"]))
-        ax.scatter(xs, ys, color=color, marker=mk, label=label, s=55, alpha=0.75, edgecolors="k", lw=0.4)
+                rows = R.get((n, d, eng, bit), [])
+                rm, rs = stat(rows, "recall@10")
+                qm, qs = stat(rows, "qps")
+                if rm is not None and qm is not None:
+                    xs.append(rm); ys.append(qm); xerr.append(rs); yerr.append(qs)
+        if xs:
+            ax.errorbar(xs, ys, xerr=xerr, yerr=yerr, color=color, marker=mk, linestyle="none",
+                        label=label, ms=7, alpha=0.75, markeredgecolor="k", markeredgewidth=0.4,
+                        capsize=3)
     ax.set_yscale("log")
     ax.set_xlabel("recall@10"); ax.set_ylabel("QPS (single-thread)")
     ax.set_title(f"Serving speed vs recall — all cells ({bit}-bit)\nup-and-right is better",

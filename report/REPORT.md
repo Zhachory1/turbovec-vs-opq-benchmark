@@ -65,6 +65,12 @@ inner product = cosine. Held-out queries from the same distribution
 **Recall:** exact ground truth via `IndexFlatIP`; recall@k = overlap of returned
 top-k with exact top-k.
 
+**Seeds and variance:** result rows include the RNG seed. Use `--seed-count N` or
+`--seeds ...` on `scripts/bench.py` and `scripts/bench_ivf.py` to run repeated
+cells. Generated tables report mean ± sample standard deviation for build time,
+size, QPS, latency, and recall when multiple seed rows exist; generated figures
+show error bars for the same repeated cells.
+
 **Fairness controls**
 - All searches **single-threaded** (`faiss.omp_set_num_threads(1)`).
 - TurboVec needs dim = multiple of 8, so vectors are **zero-padded** (10→16,
